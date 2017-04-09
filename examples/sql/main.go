@@ -4,7 +4,6 @@ import (
 	"flag"
 
 	"github.com/asticode/go-astilog"
-	"github.com/asticode/go-astimysql"
 	"github.com/asticode/go-astipatch"
 	"github.com/asticode/go-astitools/flag"
 	"github.com/jmoiron/sqlx"
