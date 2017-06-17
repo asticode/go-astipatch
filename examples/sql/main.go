@@ -4,6 +4,7 @@ import (
 	"flag"
 
 	"github.com/asticode/go-astilog"
+	astimysql "github.com/asticode/go-astimysql"
 	"github.com/asticode/go-astipatch"
 	"github.com/asticode/go-astitools/flag"
 	"github.com/jmoiron/sqlx"
@@ -15,45 +16,43 @@ func main() {
 	flag.Parse()
 
 	// Init logger
-	var l = astilog.New(astilog.FlagConfig())
+	astilog.SetLogger(astilog.New(astilog.FlagConfig()))
 
 	// Init db
 	var db *sqlx.DB
 	var err error
 	if db, err = astimysql.New(astimysql.FlagConfig()); err != nil {
-		l.Fatal(err)
+		astilog.Fatal(err)
 	}
 	defer db.Close()
 
 	// Init storer
 	var st = astipatch.NewStorerSQL(db)
-	st.SetLogger(l)
 
 	// Init patcher
 	var p = astipatch.NewPatcherSQL(db, st)
-	p.SetLogger(l)
 
 	// Load patches
 	if err = p.Load(astipatch.FlagConfig()); err != nil {
-		l.Fatal(err)
+		astilog.Fatal(err)
 	}
 
 	// Switch on subcommand
 	switch s {
 	case "init":
 		if err = p.Init(); err != nil {
-			l.Fatal(err)
+			astilog.Fatal(err)
 		}
-		l.Info("Init successful")
+		astilog.Info("Init successful")
 	case "patch":
 		if err = p.Patch(); err != nil {
-			l.Fatal(err)
+			astilog.Fatal(err)
 		}
-		l.Info("Patch successful")
+		astilog.Info("Patch successful")
 	case "rollback":
 		if err = p.Rollback(); err != nil {
-			l.Fatal(err)
+			astilog.Fatal(err)
 		}
-		l.Info("Rollback successful")
+		astilog.Info("Rollback successful")
 	}
 }

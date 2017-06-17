@@ -2,7 +2,6 @@ package astipatch
 
 import (
 	"database/sql"
-
 	"fmt"
 	"strings"
 
@@ -11,7 +10,6 @@ import (
 
 // storerSQL represents a SQL storer
 type storerSQL struct {
-	*storerBase
 	conn *sqlx.DB
 }
 
@@ -24,8 +22,7 @@ type storedPatchSQL struct {
 // NewStorerSQL creates a new SQL storer
 func NewStorerSQL(conn *sqlx.DB) Storer {
 	return &storerSQL{
-		conn:       conn,
-		storerBase: newStorerBase(),
+		conn: conn,
 	}
 }
 
