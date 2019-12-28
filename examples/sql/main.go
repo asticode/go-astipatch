@@ -3,16 +3,16 @@ package main
 import (
 	"flag"
 
+	"github.com/asticode/go-astikit"
 	"github.com/asticode/go-astilog"
-	astimysql "github.com/asticode/go-astimysql"
+	"github.com/asticode/go-astimysql"
 	"github.com/asticode/go-astipatch"
-	"github.com/asticode/go-astitools/flag"
 	"github.com/jmoiron/sqlx"
 )
 
 func main() {
-	// Subcommand
-	var s = astiflag.Subcommand()
+	// Flags
+	cmd := astikit.FlagCmd()
 	flag.Parse()
 
 	// Init logger
@@ -38,7 +38,7 @@ func main() {
 	}
 
 	// Switch on subcommand
-	switch s {
+	switch cmd {
 	case "init":
 		if err = p.Init(); err != nil {
 			astilog.Fatal(err)
