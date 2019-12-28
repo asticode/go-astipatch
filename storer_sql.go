@@ -80,7 +80,7 @@ func (s *storerSQL) InsertBatch(names []string) (err error) {
 
 	// Insert
 	if _, err = s.conn.Exec("INSERT INTO astipatch (patch, batch) VALUES " + strings.Join(values, ",")); err != nil {
-
+		return
 	}
 	return
 }
