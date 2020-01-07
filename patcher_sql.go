@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/asticode/go-astilog"
+	"github.com/asticode/go-astikit"
 	"github.com/jmoiron/sqlx"
 )
 
@@ -19,6 +19,7 @@ var (
 // patcherSQL represents a SQL patcher
 type patcherSQL struct {
 	conn         *sqlx.DB
+	l            astikit.SeverityLogger
 	patches      map[string]*patchSQL // Indexed by name
 	patchesNames []string
 	storer       Storer
@@ -31,9 +32,10 @@ type patchSQL struct {
 }
 
 // NewPatcherSQL creates a new SQL patcher
-func NewPatcherSQL(conn *sqlx.DB, s Storer) Patcher {
+func NewPatcherSQL(conn *sqlx.DB, s Storer, l astikit.StdLogger) Patcher {
 	return &patcherSQL{
 		conn:         conn,
+		l:            astikit.AdaptStdLogger(l),
 		patches:      make(map[string]*patchSQL),
 		patchesNames: []string{},
 		storer:       s,
@@ -47,12 +49,12 @@ func (p *patcherSQL) Init() error {
 
 // Load loads the patches
 func (p *patcherSQL) Load(c Configuration) (err error) {
-	astilog.Debug("Loading patches")
+	p.l.Debug("Loading patches")
 	if c.PatchesDirectoryPath != "" {
-		astilog.Debugf("Patches directory is %s", c.PatchesDirectoryPath)
+		p.l.Debugf("Patches directory is %s", c.PatchesDirectoryPath)
 		if err = filepath.Walk(c.PatchesDirectoryPath, func(path string, info os.FileInfo, _ error) (err error) {
 			// Log
-			astilog.Debugf("Processing %s", path)
+			p.l.Debugf("Processing %s", path)
 
 			// Skip directories
 			if info.IsDir() {
@@ -61,7 +63,7 @@ func (p *patcherSQL) Load(c Configuration) (err error) {
 
 			// Skip none .sql files
 			if filepath.Ext(path) != ".sql" {
-				astilog.Debugf("Skipping non .sql file %s", path)
+				p.l.Debugf("Skipping non .sql file %s", path)
 				return
 			}
 
@@ -90,7 +92,7 @@ func (p *patcherSQL) Load(c Configuration) (err error) {
 
 			// No queries to add
 			if len(queries) == 0 {
-				astilog.Debug("No queries to add")
+				p.l.Debug("No queries to add")
 				return
 			}
 
@@ -103,10 +105,10 @@ func (p *patcherSQL) Load(c Configuration) (err error) {
 			}
 			if rollback {
 				p.patches[name].rollbacks = append(p.patches[name].rollbacks, queries...)
-				astilog.Debugf("Adding %d rollback(s) to patch %s", len(queries), name)
+				p.l.Debugf("Adding %d rollback(s) to patch %s", len(queries), name)
 			} else {
 				p.patches[name].queries = append(p.patches[name].queries, queries...)
-				astilog.Debugf("Adding %d querie(s) to patch %s", len(queries), name)
+				p.l.Debugf("Adding %d querie(s) to patch %s", len(queries), name)
 			}
 			return
 		}); err != nil {
@@ -126,7 +128,7 @@ func (p *patcherSQL) Patch() (err error) {
 
 	// No patches to run
 	if len(patchesToRun) == 0 {
-		astilog.Debug("No patches to run")
+		p.l.Debug("No patches to run")
 		return
 	}
 
@@ -136,7 +138,7 @@ func (p *patcherSQL) Patch() (err error) {
 	}
 
 	// Insert batch
-	astilog.Debug("Inserting batch")
+	p.l.Debug("Inserting batch")
 	if err = p.storer.InsertBatch(patchesToRun); err != nil {
 		return
 	}
@@ -150,29 +152,29 @@ func (p *patcherSQL) patch(patchesToRun []string) (err error) {
 	if tx, err = p.conn.Beginx(); err != nil {
 		return
 	}
-	astilog.Debug("Beginning transaction")
+	p.l.Debug("Beginning transaction")
 
 	// Commit/Rollback
 	var rollbacks []string
 	defer func(err *error, rollbacks *[]string) {
 		if *err != nil {
 			// Rollback transaction
-			astilog.Debug("Rollbacking transaction")
+			p.l.Debug("Rollbacking transaction")
 			if e := tx.Rollback(); e != nil {
-				astilog.Errorf("%s while rolling back transaction", e)
+				p.l.Errorf("%s while rolling back transaction", e)
 			}
 
 			// Run manual rollbacks
 			if len(*rollbacks) > 0 {
-				astilog.Debug("Running manual rollbacks")
+				p.l.Debug("Running manual rollbacks")
 				if e := p.rollback(*rollbacks); e != nil {
-					astilog.Errorf("%s while running manual rollbacks", e)
+					p.l.Errorf("%s while running manual rollbacks", e)
 				}
 			}
 		} else {
-			astilog.Debug("Committing transaction")
+			p.l.Debug("Committing transaction")
 			if e := tx.Commit(); e != nil {
-				astilog.Errorf("%s while committing transaction", e)
+				p.l.Errorf("%s while committing transaction", e)
 			}
 		}
 	}(&err, &rollbacks)
@@ -182,9 +184,9 @@ func (p *patcherSQL) patch(patchesToRun []string) (err error) {
 		// Loop through queries
 		for _, query := range p.patches[patch].queries {
 			// Exec
-			astilog.Debugf("Running query %s of patch %s", string(query), patch)
+			p.l.Debugf("Running query %s of patch %s", string(query), patch)
 			if _, err = tx.Exec(string(query)); err != nil {
-				astilog.Errorf("%s while executing %s", err, string(query))
+				p.l.Errorf("%s while executing %s", err, string(query))
 				return
 			}
 		}
@@ -207,7 +209,7 @@ func (p *patcherSQL) Rollback() (err error) {
 
 	// No patches to rollback
 	if len(patchesToRollback) == 0 {
-		astilog.Debug("No patches to rollback")
+		p.l.Debug("No patches to rollback")
 		return
 	}
 
@@ -225,7 +227,7 @@ func (p *patcherSQL) Rollback() (err error) {
 	}
 
 	// Delete last batch
-	astilog.Debug("Deleting last batch")
+	p.l.Debug("Deleting last batch")
 	if err = p.storer.DeleteLastBatch(); err != nil {
 		return
 	}
@@ -239,28 +241,28 @@ func (p *patcherSQL) rollback(queries []string) (err error) {
 	if tx, err = p.conn.Beginx(); err != nil {
 		return
 	}
-	astilog.Debug("Beginning transaction")
+	p.l.Debug("Beginning transaction")
 
 	// Commit/Rollback
 	defer func(err *error) {
 		if *err != nil {
-			astilog.Debug("Rollbacking transaction")
+			p.l.Debug("Rollbacking transaction")
 			if e := tx.Rollback(); e != nil {
-				astilog.Errorf("%s while rolling back transaction", e)
+				p.l.Errorf("%s while rolling back transaction", e)
 			}
 		} else {
-			astilog.Debug("Committing transaction")
+			p.l.Debug("Committing transaction")
 			if e := tx.Commit(); e != nil {
-				astilog.Errorf("%s while committing transaction", e)
+				p.l.Errorf("%s while committing transaction", e)
 			}
 		}
 	}(&err)
 
 	// Loop through patches to rollback in reverse order
 	for i := len(queries) - 1; i >= 0; i-- {
-		astilog.Debugf("Running rollback %s", queries[i])
+		p.l.Debugf("Running rollback %s", queries[i])
 		if _, err = tx.Exec(queries[i]); err != nil {
-			astilog.Errorf("%s while executing %s", err, queries[i])
+			p.l.Errorf("%s while executing %s", err, queries[i])
 			return
 		}
 	}
