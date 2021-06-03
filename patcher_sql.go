@@ -258,11 +258,11 @@ func (p *patcherSQL) rollback(queries []string) (err error) {
 		}
 	}(&err)
 
-	// Loop through patches to rollback in reverse order
-	for i := len(queries) - 1; i >= 0; i-- {
-		p.l.Debugf("Running rollback %s", queries[i])
-		if _, err = tx.Exec(queries[i]); err != nil {
-			p.l.Errorf("%s while executing %s", err, queries[i])
+	// Loop through rollback queries
+	for _, query := range queries {
+		p.l.Debugf("Running rollback %s", query)
+		if _, err = tx.Exec(query); err != nil {
+			p.l.Errorf("%s while executing %s", err, query)
 			return
 		}
 	}
