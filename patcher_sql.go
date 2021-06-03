@@ -121,32 +121,31 @@ func (p *patcherSQL) Load(c Configuration) (err error) {
 // Patch implements the Patcher interface
 func (p *patcherSQL) Patch() (err error) {
 	// Get patches to run
-	var patchesToRun []string
-	if patchesToRun, err = p.storer.Delta(p.patchesNames); err != nil {
+	var patches []string
+	if patches, err = p.storer.Delta(p.patchesNames); err != nil {
 		return
 	}
 
 	// No patches to run
-	if len(patchesToRun) == 0 {
+	if len(patches) == 0 {
 		p.l.Debug("No patches to run")
 		return
 	}
 
 	// Patch
-	if err = p.patch(patchesToRun); err != nil {
+	if err = p.patch(patches); err != nil {
 		return
 	}
 
 	// Insert batch
 	p.l.Debug("Inserting batch")
-	if err = p.storer.InsertBatch(patchesToRun); err != nil {
+	if err = p.storer.InsertBatch(patches); err != nil {
 		return
 	}
 	return
 }
 
-// patch executes a set of query
-func (p *patcherSQL) patch(patchesToRun []string) (err error) {
+func (p *patcherSQL) patch(patches []string) (err error) {
 	// Start transaction
 	var tx *sqlx.Tx
 	if tx, err = p.conn.Beginx(); err != nil {
@@ -155,21 +154,12 @@ func (p *patcherSQL) patch(patchesToRun []string) (err error) {
 	p.l.Debug("Beginning transaction")
 
 	// Commit/Rollback
-	var rollbacks []string
-	defer func(err *error, rollbacks *[]string) {
+	defer func(err *error) {
 		if *err != nil {
 			// Rollback transaction
 			p.l.Debug("Rollbacking transaction")
 			if e := tx.Rollback(); e != nil {
 				p.l.Errorf("%s while rolling back transaction", e)
-			}
-
-			// Run manual rollbacks
-			if len(*rollbacks) > 0 {
-				p.l.Debug("Running manual rollbacks")
-				if e := p.rollback(*rollbacks); e != nil {
-					p.l.Errorf("%s while running manual rollbacks", e)
-				}
 			}
 		} else {
 			p.l.Debug("Committing transaction")
@@ -177,10 +167,10 @@ func (p *patcherSQL) patch(patchesToRun []string) (err error) {
 				p.l.Errorf("%s while committing transaction", e)
 			}
 		}
-	}(&err, &rollbacks)
+	}(&err)
 
-	// Loop through patches to run
-	for _, patch := range patchesToRun {
+	// Loop through patches
+	for _, patch := range patches {
 		// Loop through queries
 		for _, query := range p.patches[patch].queries {
 			// Exec
@@ -190,11 +180,6 @@ func (p *patcherSQL) patch(patchesToRun []string) (err error) {
 				return
 			}
 		}
-
-		// Add rollbacks in case of errors
-		for _, rollback := range p.patches[patch].rollbacks {
-			rollbacks = append(rollbacks, string(rollback))
-		}
 	}
 	return
 }
@@ -202,27 +187,19 @@ func (p *patcherSQL) patch(patchesToRun []string) (err error) {
 // Rollback implements the Patcher interface
 func (p *patcherSQL) Rollback() (err error) {
 	// Get patches to rollback
-	var patchesToRollback []string
-	if patchesToRollback, err = p.storer.LastBatch(); err != nil {
+	var patches []string
+	if patches, err = p.storer.LastBatch(); err != nil {
 		return
 	}
 
 	// No patches to rollback
-	if len(patchesToRollback) == 0 {
+	if len(patches) == 0 {
 		p.l.Debug("No patches to rollback")
 		return
 	}
 
-	// Get rollback queries
-	var queries []string
-	for _, patch := range patchesToRollback {
-		for _, rollback := range p.patches[patch].rollbacks {
-			queries = append(queries, string(rollback))
-		}
-	}
-
 	// Rollback
-	if err = p.rollback(queries); err != nil {
+	if err = p.rollback(patches); err != nil {
 		return
 	}
 
@@ -234,8 +211,7 @@ func (p *patcherSQL) Rollback() (err error) {
 	return
 }
 
-// rollback executes a set of query in reverse order
-func (p *patcherSQL) rollback(queries []string) (err error) {
+func (p *patcherSQL) rollback(patches []string) (err error) {
 	// Start transaction
 	var tx *sqlx.Tx
 	if tx, err = p.conn.Beginx(); err != nil {
@@ -258,12 +234,15 @@ func (p *patcherSQL) rollback(queries []string) (err error) {
 		}
 	}(&err)
 
-	// Loop through rollback queries
-	for _, query := range queries {
-		p.l.Debugf("Running rollback %s", query)
-		if _, err = tx.Exec(query); err != nil {
-			p.l.Errorf("%s while executing %s", err, query)
-			return
+	// Loop through patches in reverse order
+	for idx := len(patches) - 1; idx >= 0; idx-- {
+		// Loop through rollbacks
+		for _, rollback := range p.patches[patches[idx]].rollbacks {
+			p.l.Debugf("Running rollback %s", rollback)
+			if _, err = tx.Exec(string(rollback)); err != nil {
+				p.l.Errorf("%s while executing %s", err, rollback)
+				return
+			}
 		}
 	}
 	return
