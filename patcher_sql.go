@@ -155,11 +155,14 @@ func (p *patcherSQL) patch(patches []string) (err error) {
 
 	// Loop through patches
 	for _, patch := range patches {
+		// Log
+		p.l.Debugf("astipatch: executing queries of patch %s", patch)
+
 		// Loop through transactions
-		for _, transaction := range *p.patches[patch] {
+		for idx, transaction := range *p.patches[patch] {
 			// Exec
 			if err = p.exec(transaction.Queries); err != nil {
-				err = fmt.Errorf("astipatch: executing failed: %w", err)
+				err = fmt.Errorf("astipatch: executing queries of transaction %d of patch %s failed: %w", idx, patch, err)
 				return
 			}
 
@@ -203,11 +206,14 @@ func (p *patcherSQL) Rollback() (err error) {
 func (p *patcherSQL) rollback(patches []string) (err error) {
 	// Loop through patches in reverse order
 	for idxPatch := len(patches) - 1; idxPatch >= 0; idxPatch-- {
+		// Log
+		p.l.Debugf("astipatch: executing rollbacks of patch %s", patches[idxPatch])
+
 		// Loop through transactions in reverse order
 		for idxTransaction := len(*p.patches[patches[idxPatch]]) - 1; idxTransaction >= 0; idxTransaction-- {
 			// Exec
 			if err = p.exec((*p.patches[patches[idxPatch]])[idxTransaction].Rollbacks); err != nil {
-				err = fmt.Errorf("astipatch: executing failed: %w", err)
+				err = fmt.Errorf("astipatch: executing rollbacks of transaction %d of patch %s failed: %w", idxTransaction, patches[idxPatch], err)
 				return
 			}
 		}
