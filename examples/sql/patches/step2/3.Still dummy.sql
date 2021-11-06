@@ -1,1 +1,0 @@
-UPDATE test SET name = 'test 2' WHERE id = 2;

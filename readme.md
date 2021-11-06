@@ -1,14 +1,32 @@
-# About
+Patch manager written in GO.
 
-TODO
-
-# Examples
+# Languages
 ## SQL
 
-Run the following commands :
+Patches are described as an array of transactions in `yaml`. Each transaction can contain multiple queries and/or rollbacks.
 
-    $ go run examples/sql/main.go init -db-addr <the db addr> -db-name <the db name> -db-password <your value> -db-username <your value> 
-    $ go run examples/sql/main.go patch -db-addr <the db addr> -db-name <the db name> -db-password <your value> -db-username <your value> -astipatch-patches-directory-path examples/sql/patches/step1
-    $ go run examples/sql/main.go patch -db-addr <the db addr> -db-name <the db name> -db-password <your value> -db-username <your value> -astipatch-patches-directory-path examples/sql/patches/step2
-    $ go run examples/sql/main.go rollback -db-addr <the db addr> -db-name <the db name> -db-password <your value> -db-username <your value> -astipatch-patches-directory-path examples/sql/patches/step2
-    $ go run examples/sql/main.go rollback -db-addr <the db addr> -db-name <the db name> -db-password <your value> -db-username <your value> -astipatch-patches-directory-path examples/sql/patches/step2
+A transaction **must** only describe:
+- either one [statement causing an implicit commit](https://dev.mysql.com/doc/refman/8.0/en/implicit-commit.html)
+- or multiple statements not causing an implicit commit
+
+```yml
+-
+  queries:
+    - >      
+      CREATE TABLE test (
+        name VARCHAR(255) NOT NULL
+      )
+  rollbacks:
+    - DROP TABLE test
+-
+  queries:
+    - INSERT INTO test (name) VALUES ('test 1'), ('test2')
+    - UPDATE test SET name = 'test 2' WHERE id = 2
+  rollbacks:
+    - DELETE FROM test WHERE id IN (1, 2)
+-
+  queries:
+    - ALTER TABLE test ADD id int NOT NULL AUTO_INCREMENT PRIMARY KEY
+  rollbacks:
+    - ALTER TABLE test DROP COLUMN id
+```

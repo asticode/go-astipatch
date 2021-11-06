@@ -28,7 +28,10 @@ func NewStorerSQL(conn *sqlx.DB) Storer {
 
 // DeleteLastBatch implements the Storer interface
 func (s *storerSQL) DeleteLastBatch() (err error) {
-	_, err = s.conn.Exec("DELETE FROM astipatch WHERE batch = (SELECT * FROM (SELECT MAX(batch) FROM astipatch) as t)")
+	if _, err = s.conn.Exec("DELETE FROM astipatch WHERE batch = (SELECT * FROM (SELECT MAX(batch) FROM astipatch) as t)"); err != nil {
+		err = fmt.Errorf("astipatch: executing failed: %w", err)
+		return
+	}
 	return
 }
 
@@ -37,6 +40,7 @@ func (s *storerSQL) Delta(is []string) (os []string, err error) {
 	// Fetch patches
 	var ps []storedPatchSQL
 	if err = s.conn.Select(&ps, "SELECT * FROM astipatch"); err != nil {
+		err = fmt.Errorf("astipatch: selecting failed: %w", err)
 		return
 	}
 
@@ -57,7 +61,10 @@ func (s *storerSQL) Delta(is []string) (os []string, err error) {
 
 // Init implements the Storer interface
 func (s *storerSQL) Init() (err error) {
-	_, err = s.conn.Exec("CREATE TABLE IF NOT EXISTS astipatch (patch VARCHAR(255) NOT NULL, batch INT(11) NOT NULL)")
+	if _, err = s.conn.Exec("CREATE TABLE IF NOT EXISTS astipatch (patch VARCHAR(255) NOT NULL, batch INT(11) NOT NULL)"); err != nil {
+		err = fmt.Errorf("astipatch: executing failed: %w", err)
+		return
+	}
 	return
 }
 
@@ -66,6 +73,7 @@ func (s *storerSQL) InsertBatch(names []string) (err error) {
 	// Fetch max batch
 	var sp, max = storedPatchSQL{}, 0
 	if err = s.conn.Get(&sp, "SELECT IFNULL(MAX(batch), 0) as batch FROM astipatch"); err != nil && err != sql.ErrNoRows {
+		err = fmt.Errorf("astipatch: getting failed: %w", err)
 		return
 	} else if err == nil {
 		max = sp.Batch
@@ -80,6 +88,7 @@ func (s *storerSQL) InsertBatch(names []string) (err error) {
 
 	// Insert
 	if _, err = s.conn.Exec("INSERT INTO astipatch (patch, batch) VALUES " + strings.Join(values, ",")); err != nil {
+		err = fmt.Errorf("astipatch: executing failed: %w", err)
 		return
 	}
 	return
@@ -90,6 +99,7 @@ func (s *storerSQL) LastBatch() (ps []string, err error) {
 	// Fetch last batch
 	var sps []storedPatchSQL
 	if err = s.conn.Select(&sps, "SELECT * FROM astipatch WHERE batch = (SELECT MAX(batch) FROM astipatch)"); err != nil && err != sql.ErrNoRows {
+		err = fmt.Errorf("astipatch: selecting failed: %w", err)
 		return
 	}
 

@@ -1,10 +1,5 @@
 package astipatch
 
-// Constants
-const (
-	rollbackSuffix = "_rollback"
-)
-
 // Patcher represents an object capable of patching
 type Patcher interface {
 	Init() error

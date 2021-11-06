@@ -1,44 +1,40 @@
 package astipatch
 
 import (
-	"bytes"
-	"io/ioutil"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/asticode/go-astikit"
 	"github.com/jmoiron/sqlx"
-)
-
-// Vars
-var (
-	sqlQuerySeparator = []byte(";")
+	"gopkg.in/yaml.v2"
 )
 
 // patcherSQL represents a SQL patcher
 type patcherSQL struct {
-	conn         *sqlx.DB
-	l            astikit.SeverityLogger
-	patches      map[string]*patchSQL // Indexed by name
-	patchesNames []string
-	storer       Storer
+	conn             *sqlx.DB
+	l                astikit.SeverityLogger
+	patches          map[string]*PatchSQL // Indexed by name
+	sortedPatchNames []string
+	storer           Storer
 }
 
-// patchSQL represents a SQL patch
-type patchSQL struct {
-	queries   [][]byte
-	rollbacks [][]byte
+type PatchSQL []PatchSQLTransaction
+
+type PatchSQLTransaction struct {
+	Queries   []string `yaml:"queries"`
+	Rollbacks []string `yaml:"rollbacks"`
 }
 
 // NewPatcherSQL creates a new SQL patcher
 func NewPatcherSQL(conn *sqlx.DB, s Storer, l astikit.StdLogger) Patcher {
 	return &patcherSQL{
-		conn:         conn,
-		l:            astikit.AdaptStdLogger(l),
-		patches:      make(map[string]*patchSQL),
-		patchesNames: []string{},
-		storer:       s,
+		conn:    conn,
+		l:       astikit.AdaptStdLogger(l),
+		patches: make(map[string]*PatchSQL),
+		storer:  s,
 	}
 }
 
@@ -49,72 +45,62 @@ func (p *patcherSQL) Init() error {
 
 // Load loads the patches
 func (p *patcherSQL) Load(c Configuration) (err error) {
-	p.l.Debug("Loading patches")
-	if c.PatchesDirectoryPath != "" {
-		p.l.Debugf("Patches directory is %s", c.PatchesDirectoryPath)
-		if err = filepath.Walk(c.PatchesDirectoryPath, func(path string, info os.FileInfo, _ error) (err error) {
-			// Log
-			p.l.Debugf("Processing %s", path)
+	// Clean patches directory path
+	dirPath := filepath.Clean(c.PatchesDirectoryPath)
 
-			// Skip directories
-			if info.IsDir() {
-				return
-			}
+	// Empty directory path
+	if dirPath == "" {
+		return
+	}
 
-			// Skip none .sql files
-			if filepath.Ext(path) != ".sql" {
-				p.l.Debugf("Skipping non .sql file %s", path)
-				return
-			}
+	// Log
+	p.l.Debug("astipatch: loading patches")
 
-			// Retrieve name and whether it's a rollback
-			var name = strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
-			var rollback bool
-			if strings.HasSuffix(name, rollbackSuffix) {
-				rollback = true
-				name = strings.TrimSuffix(name, rollbackSuffix)
-			}
-
-			// Read file
-			var b []byte
-			if b, err = ioutil.ReadFile(path); err != nil {
-				return
-			}
-
-			// Split on query separator and clean queries
-			var items, queries = bytes.Split(b, sqlQuerySeparator), [][]byte{}
-			for _, item := range items {
-				item = bytes.TrimSpace(item)
-				if len(item) > 0 {
-					queries = append(queries, item)
-				}
-			}
-
-			// No queries to add
-			if len(queries) == 0 {
-				p.l.Debug("No queries to add")
-				return
-			}
-
-			// Add/update patch
-			if _, ok := p.patches[name]; !ok {
-				p.patches[name] = &patchSQL{}
-			}
-			if len(p.patches[name].queries) == 0 && !rollback {
-				p.patchesNames = append(p.patchesNames, name)
-			}
-			if rollback {
-				p.patches[name].rollbacks = append(p.patches[name].rollbacks, queries...)
-				p.l.Debugf("Adding %d rollback(s) to patch %s", len(queries), name)
-			} else {
-				p.patches[name].queries = append(p.patches[name].queries, queries...)
-				p.l.Debugf("Adding %d querie(s) to patch %s", len(queries), name)
-			}
-			return
-		}); err != nil {
+	// Walk patches directory path
+	if err = filepath.Walk(dirPath, func(path string, info os.FileInfo, _ error) (err error) {
+		// Skip directories
+		if info.IsDir() {
 			return
 		}
+
+		// Only process .yml files
+		if filepath.Ext(path) != ".yml" {
+			return
+		}
+
+		// Open file
+		var f *os.File
+		if f, err = os.Open(path); err != nil {
+			err = fmt.Errorf("astipatch: opening %s failed: %w", path, err)
+			return
+		}
+		defer f.Close()
+
+		// Unmarshal
+		var y PatchSQL
+		if err = yaml.NewDecoder(f).Decode(&y); err != nil {
+			err = fmt.Errorf("astipatch: unmarshaling failed: %w", err)
+			return
+		}
+
+		// Get name
+		name := strings.TrimSuffix(strings.TrimPrefix(path, dirPath+string(os.PathSeparator)), filepath.Ext(path))
+
+		// Add patch
+		if _, ok := p.patches[name]; !ok {
+			p.patches[name] = &y
+			p.sortedPatchNames = append(p.sortedPatchNames, name)
+		}
+		return
+	}); err != nil {
+		return
 	}
+
+	// Log
+	p.l.Debugf("astipatch: %d loaded patch(es)", len(p.patches))
+
+	// Sort patch names
+	sort.Strings(p.sortedPatchNames)
 	return
 }
 
@@ -122,13 +108,16 @@ func (p *patcherSQL) Load(c Configuration) (err error) {
 func (p *patcherSQL) Patch() (err error) {
 	// Get patches to run
 	var patches []string
-	if patches, err = p.storer.Delta(p.patchesNames); err != nil {
+	if patches, err = p.storer.Delta(p.sortedPatchNames); err != nil {
+		err = fmt.Errorf("astipatch: getting delta failed: %w", err)
 		return
 	}
 
+	// Log
+	p.l.Debugf("astipatch: %d patch(es) to run", len(patches))
+
 	// No patches to run
 	if len(patches) == 0 {
-		p.l.Debug("No patches to run")
 		return
 	}
 
@@ -138,47 +127,44 @@ func (p *patcherSQL) Patch() (err error) {
 	}
 
 	// Insert batch
-	p.l.Debug("Inserting batch")
 	if err = p.storer.InsertBatch(patches); err != nil {
+		err = fmt.Errorf("astipatch: inserting batch failed: %w", err)
 		return
 	}
 	return
 }
 
 func (p *patcherSQL) patch(patches []string) (err error) {
-	// Start transaction
-	var tx *sqlx.Tx
-	if tx, err = p.conn.Beginx(); err != nil {
-		return
-	}
-	p.l.Debug("Beginning transaction")
+	// In case of error, we need to exec rollbacks of transactions that were successfully executed
+	var transactions []PatchSQLTransaction
+	defer func(err *error, transactions *[]PatchSQLTransaction) {
+		// No error
+		if *err == nil {
+			return
+		}
 
-	// Commit/Rollback
-	defer func(err *error) {
-		if *err != nil {
-			// Rollback transaction
-			p.l.Debug("Rollbacking transaction")
-			if e := tx.Rollback(); e != nil {
-				p.l.Errorf("%s while rolling back transaction", e)
-			}
-		} else {
-			p.l.Debug("Committing transaction")
-			if e := tx.Commit(); e != nil {
-				p.l.Errorf("%s while committing transaction", e)
+		// Loop through transactions in reverse order
+		for idx := len(*transactions) - 1; idx >= 0; idx-- {
+			// Exec
+			if e := p.exec((*transactions)[idx].Rollbacks); e != nil {
+				p.l.Error(fmt.Errorf("astipatch: executing failed: %w", e))
+				return
 			}
 		}
-	}(&err)
+	}(&err, &transactions)
 
 	// Loop through patches
 	for _, patch := range patches {
-		// Loop through queries
-		for _, query := range p.patches[patch].queries {
+		// Loop through transactions
+		for _, transaction := range *p.patches[patch] {
 			// Exec
-			p.l.Debugf("Running query %s of patch %s", string(query), patch)
-			if _, err = tx.Exec(string(query)); err != nil {
-				p.l.Errorf("%s while executing %s", err, string(query))
+			if err = p.exec(transaction.Queries); err != nil {
+				err = fmt.Errorf("astipatch: executing failed: %w", err)
 				return
 			}
+
+			// Append transaction
+			transactions = append(transactions, transaction)
 		}
 	}
 	return
@@ -192,57 +178,70 @@ func (p *patcherSQL) Rollback() (err error) {
 		return
 	}
 
+	// Log
+	p.l.Debugf("astipatch: %d patch(es) to rollback", len(patches))
+
 	// No patches to rollback
 	if len(patches) == 0 {
-		p.l.Debug("No patches to rollback")
 		return
 	}
 
 	// Rollback
 	if err = p.rollback(patches); err != nil {
+		err = fmt.Errorf("astipatch: rolling back failed: %w", err)
 		return
 	}
 
 	// Delete last batch
-	p.l.Debug("Deleting last batch")
 	if err = p.storer.DeleteLastBatch(); err != nil {
+		err = fmt.Errorf("astipatch: deleting last batch failed: %w", err)
 		return
 	}
 	return
 }
 
 func (p *patcherSQL) rollback(patches []string) (err error) {
+	// Loop through patches in reverse order
+	for idxPatch := len(patches) - 1; idxPatch >= 0; idxPatch-- {
+		// Loop through transactions in reverse order
+		for idxTransaction := len(*p.patches[patches[idxPatch]]) - 1; idxTransaction >= 0; idxTransaction-- {
+			// Exec
+			if err = p.exec((*p.patches[patches[idxPatch]])[idxTransaction].Rollbacks); err != nil {
+				err = fmt.Errorf("astipatch: executing failed: %w", err)
+				return
+			}
+		}
+	}
+	return
+}
+
+func (p *patcherSQL) exec(queries []string) (err error) {
 	// Start transaction
 	var tx *sqlx.Tx
 	if tx, err = p.conn.Beginx(); err != nil {
+		err = fmt.Errorf("astipatch: starting transaction failed: %w", err)
 		return
 	}
-	p.l.Debug("Beginning transaction")
 
 	// Commit/Rollback
 	defer func(err *error) {
 		if *err != nil {
-			p.l.Debug("Rollbacking transaction")
 			if e := tx.Rollback(); e != nil {
-				p.l.Errorf("%s while rolling back transaction", e)
+				p.l.Error(fmt.Errorf("astipatch: rolling back transaction failed: %w", e))
 			}
 		} else {
-			p.l.Debug("Committing transaction")
 			if e := tx.Commit(); e != nil {
-				p.l.Errorf("%s while committing transaction", e)
+				p.l.Error(fmt.Errorf("astipatch: committing transaction failed: %w", e))
 			}
 		}
 	}(&err)
 
-	// Loop through patches in reverse order
-	for idx := len(patches) - 1; idx >= 0; idx-- {
-		// Loop through rollbacks
-		for _, rollback := range p.patches[patches[idx]].rollbacks {
-			p.l.Debugf("Running rollback %s", rollback)
-			if _, err = tx.Exec(string(rollback)); err != nil {
-				p.l.Errorf("%s while executing %s", err, rollback)
-				return
-			}
+	// Loop through queries
+	for _, query := range queries {
+		// Exec
+		if _, err = tx.Exec(query); err != nil {
+			err = fmt.Errorf("astipatch: executing %s failed: %w", query, err)
+			return
 		}
 	}
 	return
